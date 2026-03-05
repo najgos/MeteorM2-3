@@ -1,0 +1,70 @@
+import time
+import subprocess
+import os
+from datetime import datetime, timedelta
+from pyorbital.orbital import Orbital
+
+SAT_NAME = "METEOR-M2 3"
+#LAT, LON, ALT = location
+FREQ = "137900000"
+SAMPLE_RATE = "1 024 000"
+GAIN = "45"
+MIN_ELEVATION = 30
+MAX_ELEVATION = 75
+OUTPUT_DIR = r"C:\rec_sat"
+RTL_SDR_PATH = r"rtl_sdr.exe"
+
+if not os.path.exists(OUTPUT_DIR):
+    os.makedirs(OUTPUT_DIR)
+def get_local_now():
+    return datetime.now()
+def schedule(passes, orb):
+    found = False
+    now_utc = datetime.utcnow()
+    for start, end, max_el_time in passes:
+        max_el = orb.get_observer_look(max_el_time, LON, LAT, ALT)[1]
+        if MIN_ELEVATION <= max_el <= MAX_ELEVATION:
+            if start > now_utc:
+                start_local = start + (datetime.now() - datetime.utcnow())
+                duration = int((end - start).total_seconds())
+                print(f"{start_local.strftime('%Y-%m-%d %H:%M:%S'):<25}  {max_el:>8.2f}°  {duration:>7}s")
+                found = True
+    if not found:
+        print("Not found")
+def sdr_record(duration, filename):
+    full_path = os.path.join(OUTPUT_DIR, filename)
+    print(f"\n start: {filename}")
+    cmd = [RTL_SDR_PATH, "-f", FREQ, "-s", SAMPLE_RATE, "-g", GAIN, full_path]
+    if os.path.exists(full_path):
+        size = os.path.getsize(full_path) / (1024 * 1024)
+        print(f"Succes {size:.2f} MB")
+def record():
+    orb = Orbital(SAT_NAME)
+    while True:
+        now_utc = datetime.utcnow()
+        all_passes = orb.get_next_passes(now_utc, 72, LON, LAT, ALT)
+        schedule(all_passes, orb)
+        next = None
+        for start, end, max_el_time in all_passes:
+            max_el = orb.get_observer_look(max_el_time, LON, LAT, ALT)[1]
+            if MIN_ELEVATION <= max_el <= MAX_ELEVATION:
+                if end > datetime.utcnow():
+                    next = (start, end, max_el)
+                    break
+        if next:
+            start_utc, end_utc, max_el = next
+            wait_time = (start_utc - datetime.utcnow()).total_seconds()
+            duration = (end_utc - start_utc).total_seconds()
+            start_local = start_utc + (datetime.now() - datetime.utcnow())
+            if wait_time > 0:
+                print(f"\n Wait {start_local.strftime('%H:%M:%S')}")
+                time.sleep(wait_time)
+            filename = f"meteor_{start_local.strftime('%Y%m%d_%H%M%S')}.sdr"
+            sdr_record(duration, filename)
+            time.sleep(20)
+        else:
+            print("Not found flights")
+            print(MIN_ELEVATION,"< el <",MAX_ELEVATION)
+            time.sleep(1800)
+if __name__ == "__main__":
+    record()
